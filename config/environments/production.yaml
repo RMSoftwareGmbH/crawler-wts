@@ -1,0 +1,3 @@
+﻿environment: production
+logLevel: info
+headless: true

@@ -1,0 +1,3 @@
+﻿environment: development
+logLevel: debug
+headless: true

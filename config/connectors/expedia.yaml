@@ -1,0 +1,8 @@
+﻿source: expedia
+enabled: true
+maxPages: 10
+maxReviewsPerRun: 100
+requestTimeoutMs: 30000
+delay:
+  minMs: 1500
+  maxMs: 4000
