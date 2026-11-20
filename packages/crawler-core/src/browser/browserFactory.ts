@@ -129,6 +129,12 @@ export async function createBrowserSession(
         title: () => browserPage.title(),
         locator: (selector) => browserPage.locator(selector),
         waitForTimeout: (timeout) => browserPage.waitForTimeout(timeout),
+        evaluate: browserPage.evaluate.bind(browserPage),
+        mouse: {
+          move: (x, y) => browserPage.mouse.move(x, y),
+          wheel: (deltaX, deltaY) =>
+            browserPage.mouse.wheel(deltaX, deltaY),
+        },
         scrollFirstScrollable: (selector) =>
           browserPage.evaluate((panelSelector) => {
             const roots = Array.from(

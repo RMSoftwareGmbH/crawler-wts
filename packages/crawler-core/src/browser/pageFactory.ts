@@ -1,3 +1,5 @@
+import type { Page } from "playwright";
+
 export interface CrawlerLocator {
   count(): Promise<number>;
   nth(index: number): CrawlerLocator;
@@ -23,6 +25,8 @@ export interface CrawlerPage {
   locator(selector: string): CrawlerLocator;
   waitForTimeout(timeout: number): Promise<void>;
   scrollFirstScrollable(selector: string): Promise<boolean>;
+  evaluate?: Page["evaluate"];
+  mouse?: Pick<Page["mouse"], "move" | "wheel">;
 }
 
 export interface BrowserSession {

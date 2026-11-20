@@ -205,6 +205,7 @@ export class FixturePage implements CrawlerPage {
   private currentUrl = "https://www.google.com/maps/place/example-hotel";
   reviewsClickCount = 0;
   reviewExpansionClickCount = 0;
+  originalLanguageClickCount = 0;
   scrollCount = 0;
   waitDurations: number[] = [];
 
@@ -284,6 +285,28 @@ export class FixturePage implements CrawlerPage {
         "$1Less</button>",
       );
     }
+    if (node.attributes["data-action"] === "show-original") {
+      this.originalLanguageClickCount += 1;
+      const originalText = node.attributes["data-original-text"] ?? "";
+      const originalLanguage = node.attributes["data-original-language"] ?? "";
+      this.html = this.html
+        .replace(
+          /(<span\b[^>]*data-review-text[^>]*\blang=")[^"]*(")/i,
+          `$1${originalLanguage}$2`,
+        )
+        .replace(
+          /(<span\b[^>]*data-review-text[^>]*>)[\s\S]*?(<\/span>)/i,
+          `$1${originalText}$2`,
+        )
+        .replace(
+          /(aria-label=")[^"]*(")(?=[^>]*data-action="show-original")/i,
+          "$1عرض الترجمة$2",
+        )
+        .replace(
+          /(<button\b[^>]*data-action="show-original"[^>]*>)[\s\S]*?(<\/button>)/i,
+          "$1عرض الترجمة$2",
+        );
+    }
   }
 
   loadMore(buttonAttributes: Record<string, string>): void {
@@ -297,7 +320,7 @@ export class FixturePage implements CrawlerPage {
       );
     }
     this.html = this.html.replace(
-      /<button\b[^>]*data-load-more[^>]*>[\s\S]*?<\/button>/i,
+      /<(?:button|a)\b[^>]*data-load-more[^>]*>[\s\S]*?<\/(?:button|a)>/i,
       "",
     );
   }

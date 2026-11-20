@@ -54,6 +54,7 @@ export interface CrawlDiagnostics {
   reviewsControlFound?: boolean;
   reviewsControlClicked?: boolean;
   reviewsPanelFound?: boolean;
+  moreReviewsControlClicked?: boolean;
   reviewCardCountBeforeClick?: number;
   reviewCardCountAfterClick?: number;
   maxReviewsPerRun?: number;
@@ -67,6 +68,9 @@ export interface CrawlDiagnostics {
   reviewPanelOpeningMs?: number;
   parsingMs?: number;
   scrollingMs?: number;
+  originalLanguageControlsFound?: number;
+  originalLanguageControlsClicked?: number;
+  originalLanguageControlsChanged?: number;
   consentPageDetected: boolean;
   challengePageDetected: boolean;
   authenticationPageDetected: boolean;

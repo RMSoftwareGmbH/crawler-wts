@@ -4,6 +4,7 @@ import type {
   CrawlerPage,
 } from "../../../crawler-core/src/browser/pageFactory.js";
 import type { GoogleDetection } from "./GoogleDetection.js";
+import { isFullReviewsLabel } from "./GoogleLabels.js";
 import { GoogleSelectors, selectorList } from "./GoogleSelectors.js";
 
 export interface GooglePaginationOptions {
@@ -23,13 +24,12 @@ export interface GooglePaginationResult {
     | "no_load_more_button"
     | "no_new_cards"
     | "max_pages_reached"
+    | "protection_page"
     | "last_seen_review_id_reached";
 }
 
 function isMoreReviewsLabel(value: string): boolean {
-  return /^(?:more reviews?(?:\s*\(\d+\))?|plus d['’]avis)$/i.test(
-    value.trim(),
-  );
+  return isFullReviewsLabel(value);
 }
 
 export class GooglePagination {

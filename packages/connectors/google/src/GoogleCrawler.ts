@@ -24,10 +24,17 @@ import { logger } from "../../../crawler-observability/src/index.js";
 import { deduplicateReviews } from "../../../crawler-normalization/src/index.js";
 import { GoogleDetection } from "./GoogleDetection.js";
 import { GoogleMapper } from "./GoogleMapper.js";
-import { GooglePagination } from "./GooglePagination.js";
-import { GoogleParser } from "./GoogleParser.js";
+import {
+  GooglePagination,
+  type GooglePaginationResult,
+} from "./GooglePagination.js";
+import { GoogleParser, type ParsedGoogleReview } from "./GoogleParser.js";
 import { GoogleReviewInteraction } from "./GoogleReviewInteraction.js";
 import { GoogleSelectors, selectorList } from "./GoogleSelectors.js";
+import {
+  loadGoogleScrollConfig,
+  type GoogleScrollConfig,
+} from "./GoogleScrollConfig.js";
 
 const CRAWLER_VERSION = "1.0.0";
 const DEFAULT_MAX_PAGES = 10;
@@ -40,6 +47,12 @@ const DEFAULT_INTERACTION_WAIT_MS = 1_000;
 const OPTIMIZED_DELAY_MS = 500;
 const OPTIMIZED_PANEL_WAIT_MS = 1_200;
 const OPTIMIZED_INTERACTION_WAIT_MS = 250;
+const PROTECTION_CLASSIFICATIONS: readonly string[] = [
+  "challenge_page",
+  "consent_page",
+  "authentication_required",
+  "blocked_page",
+];
 
 export interface GoogleCrawlerOptions {
   sessionFactory?: (options: {
@@ -67,6 +80,8 @@ export interface GoogleCrawlerOptions {
   interactionWaitMs?: number;
   reviewInteraction?: GoogleReviewInteraction;
   optimizationEnabled?: boolean;
+  /** Overrides for the GOOGLE_* scroll settings (mainly for tests). */
+  scroll?: Partial<GoogleScrollConfig>;
 }
 
 type CrawlStage =
@@ -123,6 +138,15 @@ function diagnosticsUrl(value: string): string {
   } catch {
     return "[invalid URL]";
   }
+}
+
+function googleMapsUrlForLocale(value: string, locale: string): string {
+  const url = new URL(value);
+  const language = locale.split("-")[0];
+  if (language && /^[a-z]{2,3}$/i.test(language)) {
+    url.searchParams.set("hl", language.toLowerCase());
+  }
+  return url.toString();
 }
 
 function safeErrorMessage(error: unknown): string {
@@ -302,6 +326,7 @@ export class GoogleCrawler {
   private readonly panelWaitMs: number;
   private readonly interactionWaitMs: number;
   private readonly optimizationEnabled: boolean;
+  private readonly scrollOverrides: Partial<GoogleScrollConfig>;
 
   constructor(options: GoogleCrawlerOptions = {}) {
     this.optimizationEnabled =
@@ -327,6 +352,7 @@ export class GoogleCrawler {
     this.pagination = options.pagination ?? new GooglePagination();
     this.reviewInteraction =
       options.reviewInteraction ?? new GoogleReviewInteraction();
+    this.scrollOverrides = options.scroll ?? {};
     this.now = options.now ?? (() => new Date());
     this.maxRetries = Math.max(0, options.maxRetries ?? 1);
     this.retryBaseDelayMs = Math.max(0, options.retryBaseDelayMs ?? 400);
@@ -385,8 +411,7 @@ export class GoogleCrawler {
     const proxyModes = new Set(
       requests.map(
         (request) =>
-          request.proxyEnabled ??
-          process.env.DECODO_PROXY_ENABLED === "true",
+          request.proxyEnabled ?? process.env.DECODO_PROXY_ENABLED === "true",
       ),
     );
     if (proxyModes.size !== 1) {
@@ -407,14 +432,12 @@ export class GoogleCrawler {
       const results: CrawlResult[] = [];
       for (const request of requests) {
         results.push(
-          await this.crawlWithSessionFactory(
-            request,
-            async (sessionOptions) =>
-              pool.createSession({
-                ...(sessionOptions.locale
-                  ? { locale: sessionOptions.locale }
-                  : {}),
-              }),
+          await this.crawlWithSessionFactory(request, async (sessionOptions) =>
+            pool.createSession({
+              ...(sessionOptions.locale
+                ? { locale: sessionOptions.locale }
+                : {}),
+            }),
           ),
         );
       }
@@ -471,14 +494,27 @@ export class GoogleCrawler {
       };
       return this.failureResult(diagnostics);
     }
+    let scrollConfig: GoogleScrollConfig;
+    try {
+      scrollConfig = loadGoogleScrollConfig(process.env, this.scrollOverrides);
+    } catch (error) {
+      diagnostics.stoppedBecause = "invalid_scroll_configuration";
+      diagnostics.failure = {
+        classification: "configuration_failure",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Google scroll configuration is invalid.",
+      };
+      return this.failureResult(diagnostics);
+    }
     diagnostics.maxReviewsPerRun = maxReviews;
     diagnostics.reviewCardCountBeforeScroll = 0;
     diagnostics.reviewCardCountAfterEachScroll = [];
     diagnostics.scrollAttempts = 0;
     diagnostics.newReviewsPerScroll = [];
     diagnostics.totalUniqueCardsSeen = 0;
-    const interactionEnabled =
-      process.env.GOOGLE_CRAWLER_INTERACT === "true";
+    const interactionEnabled = process.env.GOOGLE_CRAWLER_INTERACT === "true";
     const settleWaitMs = Math.min(
       this.settleWaitMs,
       request.timeoutMs ?? DEFAULT_TIMEOUT_MS,
@@ -487,9 +523,13 @@ export class GoogleCrawler {
     diagnostics.settleWaitMs = settleWaitMs;
     diagnostics.optimizationEnabled = this.optimizationEnabled;
     diagnostics.abortedResourceTypes = [];
-    diagnostics.stoppedBecause =
-      interactionEnabled ? "review_panel_unavailable" : "interaction_disabled";
+    diagnostics.stoppedBecause = interactionEnabled
+      ? "review_panel_unavailable"
+      : "interaction_disabled";
     const timeoutMs = request.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const locale =
+      request.locale ?? process.env.GOOGLE_CRAWLER_LOCALE ?? "en-US";
+    const navigationUrl = googleMapsUrlForLocale(request.url, locale);
     const proxyEnabled =
       request.proxyEnabled ?? process.env.DECODO_PROXY_ENABLED === "true";
 
@@ -504,7 +544,7 @@ export class GoogleCrawler {
       try {
         session = await sessionFactory({
           proxyEnabled,
-          ...(request.locale ? { locale: request.locale } : {}),
+          locale,
           ...(process.env.GOOGLE_CRAWLER_HEADED === "true"
             ? { headless: false }
             : {}),
@@ -512,7 +552,7 @@ export class GoogleCrawler {
         });
         const activeSession: BrowserSession = session;
         const navigationStartedAt = Date.now();
-        const response = await session.page.goto(request.url, {
+        const response = await session.page.goto(navigationUrl, {
           timeout: timeoutMs,
           waitUntil: this.optimizationEnabled ? "domcontentloaded" : "load",
         });
@@ -555,7 +595,13 @@ export class GoogleCrawler {
           url: session.page.url() || request.url,
         };
         let incrementalParsingMs = 0;
-        const collectExternalReviewIds = async (): Promise<readonly string[]> => {
+        let partialStop = false;
+        // Every parsed review is cached so a later block page cannot lose them.
+        const collectedParsed = new Map<string, ParsedGoogleReview>();
+        let collectedHotelName: string | undefined;
+        const collectReviewIds = async (
+          skipCached: boolean,
+        ): Promise<readonly string[]> => {
           const parseStartedAt = Date.now();
           const parsed = await this.parser.parse(
             activeSession.page,
@@ -563,9 +609,16 @@ export class GoogleCrawler {
             {
               lastSeenReviewId: request.lastSeenReviewId,
               persistedReviewIds: request.persistedReviewIds,
+              ...(skipCached
+                ? { skipReviewIds: new Set(collectedParsed.keys()) }
+                : {}),
             },
           );
           incrementalParsingMs += Date.now() - parseStartedAt;
+          for (const review of parsed.reviews) {
+            collectedParsed.set(review.externalReviewId, review);
+          }
+          collectedHotelName = parsed.hotelName ?? collectedHotelName;
           return [
             ...parsed.reviews.map((review) => review.externalReviewId),
             ...(parsed.stoppedAtLastSeenReviewId && request.lastSeenReviewId
@@ -573,6 +626,9 @@ export class GoogleCrawler {
               : []),
           ];
         };
+        // Scrolling only needs ids of cards it has not parsed yet; pagination needs the full set.
+        const collectNewExternalReviewIds = () => collectReviewIds(true);
+        const collectExternalReviewIds = () => collectReviewIds(false);
 
         stage = "detection";
         let detection = await this.detection.classify(
@@ -618,11 +674,26 @@ export class GoogleCrawler {
                 readiness.reviewsControlSearchStartedAt,
               persistedReviewIds: request.persistedReviewIds,
               lastSeenReviewId: request.lastSeenReviewId,
-              collectExternalReviewIds,
+              collectExternalReviewIds: collectNewExternalReviewIds,
+              scroll: scrollConfig,
+              allowUnverifiedLegacyScroll:
+                process.env.GOOGLE_CRAWLER_ALLOW_LEGACY_SCROLL === "true",
+              deadlineAt: navigationStartedAt + scrollConfig.crawlTimeoutMs,
+              checkPageState: async () => {
+                const state = await this.detection.classify(
+                  activeSession.page,
+                  request.url,
+                );
+                return state.status === "valid" ? undefined : state.status;
+              },
               onProgress: (progress) => Object.assign(diagnostics, progress),
             },
           );
           Object.assign(diagnostics, interactionResult);
+          // A block mid-scroll keeps the reviews collected so far; with none collected it still fails.
+          partialStop =
+            interactionResult.stoppedBecause === "protection_page" &&
+            collectedParsed.size > 0;
           diagnostics.mapsContentReady =
             diagnostics.mapsContentReady ||
             interactionResult.reviewsControlFound ||
@@ -670,7 +741,7 @@ export class GoogleCrawler {
           detection.detections.authenticationPage;
         diagnostics.restrictedMapsViewDetected =
           detection.detections.restrictedMapsView;
-        if (detection.status !== "valid") {
+        if (detection.status !== "valid" && !partialStop) {
           throw new CrawlError(
             detection.status,
             detection.reason ?? "Google page is not available for crawling.",
@@ -678,20 +749,43 @@ export class GoogleCrawler {
         }
 
         stage = "pagination";
-        const pagination = await this.pagination.run(
-          session.page,
-          {
-            maxPages,
-            maxReviews,
-            delayMs: this.delayMs,
-            timeoutMs,
-            persistedReviewIds: request.persistedReviewIds,
-            lastSeenReviewId: request.lastSeenReviewId,
-            collectExternalReviewIds,
-          },
-          this.detection,
-          request.url,
-        );
+        let pagination: GooglePaginationResult;
+        if (partialStop) {
+          pagination = { pagesVisited: 1, stoppedBecause: "protection_page" };
+        } else {
+          try {
+            pagination = await this.pagination.run(
+              session.page,
+              {
+                maxPages,
+                maxReviews,
+                delayMs: this.delayMs,
+                timeoutMs,
+                persistedReviewIds: request.persistedReviewIds,
+                lastSeenReviewId: request.lastSeenReviewId,
+                collectExternalReviewIds,
+              },
+              this.detection,
+              request.url,
+            );
+          } catch (error) {
+            // Keep what was collected before a block, challenge or consent page.
+            if (
+              collectedParsed.size > 0 &&
+              error instanceof CrawlError &&
+              PROTECTION_CLASSIFICATIONS.includes(error.classification)
+            ) {
+              partialStop = true;
+              pagination = {
+                pagesVisited: 1,
+                stoppedBecause: "protection_page",
+              };
+              diagnostics.pageClassification = error.classification;
+            } else {
+              throw error;
+            }
+          }
+        }
         diagnostics.parsingMs = incrementalParsingMs;
         diagnostics.paginationStoppedBecause = pagination.stoppedBecause;
         if (
@@ -707,25 +801,40 @@ export class GoogleCrawler {
 
         stage = "parser";
         const parseStartedAt = Date.now();
-        const parsed = await this.parser.parse(
-          session.page,
-          resolvedRequest.url,
-          {
-            lastSeenReviewId: request.lastSeenReviewId,
-            persistedReviewIds: request.persistedReviewIds,
-          },
-        );
+        // A final full parse picks up expanded review text; it is skipped once the page is blocked.
+        const parsed = partialStop
+          ? { reviews: [], skippedReviews: 0 }
+          : await this.parser.parse(session.page, resolvedRequest.url, {
+              lastSeenReviewId: request.lastSeenReviewId,
+              persistedReviewIds: request.persistedReviewIds,
+            });
         diagnostics.parsingMs =
           (diagnostics.parsingMs ?? 0) + Date.now() - parseStartedAt;
-        if (parsed.stoppedAtLastSeenReviewId) {
+        if (
+          "stoppedAtLastSeenReviewId" in parsed &&
+          parsed.stoppedAtLastSeenReviewId
+        ) {
           diagnostics.stoppedBecause = "last_seen_review_id_reached";
         }
+        // Merge reviews collected while scrolling with the final parse (final parse wins, DOM order is kept).
+        const mergedReviews = new Map(collectedParsed);
+        for (const review of parsed.reviews) {
+          mergedReviews.set(review.externalReviewId, review);
+        }
+        const parsedReviews = [...mergedReviews.values()];
+        const parsedHotelName =
+          ("hotelName" in parsed ? parsed.hotelName : undefined) ??
+          collectedHotelName;
         diagnostics.totalUniqueCardsSeen = Math.max(
           diagnostics.totalUniqueCardsSeen ?? 0,
-          new Set(parsed.reviews.map((review) => review.externalReviewId)).size,
+          mergedReviews.size,
         );
-        diagnostics.reviewsExtracted = parsed.reviews.length;
-        if (parsed.reviews.length === 0 && parsed.skippedReviews > 0) {
+        diagnostics.reviewsExtracted = parsedReviews.length;
+        if (partialStop) {
+          diagnostics.stoppedBecause = "protection_page";
+          Object.assign(diagnostics, { partialResult: true });
+        }
+        if (parsedReviews.length === 0 && parsed.skippedReviews > 0) {
           throw new CrawlError(
             "selector_drift",
             "Google review cards were present, but none contained a usable rating and stable review identity.",
@@ -734,8 +843,8 @@ export class GoogleCrawler {
 
         stage = "mapping";
         const fetchedAt = this.now();
-        const mapped = parsed.reviews.map((review) =>
-          this.mapper.map(review, resolvedRequest, fetchedAt, parsed.hotelName),
+        const mapped = parsedReviews.map((review) =>
+          this.mapper.map(review, resolvedRequest, fetchedAt, parsedHotelName),
         );
         attemptReviews = mapped.map((review) =>
           canonicalReviewSchema.parse(review),
@@ -751,12 +860,10 @@ export class GoogleCrawler {
             ? deduplicated.reviews
             : deduplicated.reviews.filter(
                 (review) =>
-                  !review.reviewDate ||
-                  Date.parse(review.reviewDate) > cutoff,
+                  !review.reviewDate || Date.parse(review.reviewDate) > cutoff,
               );
         if (incrementalReviews.length < beforeIncrementalFilter) {
-          diagnostics.stoppedBecause =
-            "last_successful_crawl_timestamp";
+          diagnostics.stoppedBecause = "last_successful_crawl_timestamp";
         }
         attemptReviews = incrementalReviews.slice(0, maxReviews);
         diagnostics.reviewsAccepted = attemptReviews.length;

@@ -1,11 +1,26 @@
 import { readFile, rm } from "node:fs/promises";
 import { resolve } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { shouldAbortRequest } from "../../../crawler-core/src/browser/browserFactory.js";
 import { GoogleCrawler } from "../src/GoogleCrawler.js";
+import { supportsDomScrolling } from "../src/GoogleScrollRoot.js";
 import { FixturePage } from "./fixturePage.js";
 
 const hotelUrl = "https://www.google.com/maps/place/example-hotel";
+let originalLegacyScroll: string | undefined;
+
+beforeEach(() => {
+  originalLegacyScroll = process.env.GOOGLE_CRAWLER_ALLOW_LEGACY_SCROLL;
+  process.env.GOOGLE_CRAWLER_ALLOW_LEGACY_SCROLL = "true";
+});
+
+afterEach(() => {
+  if (originalLegacyScroll === undefined) {
+    delete process.env.GOOGLE_CRAWLER_ALLOW_LEGACY_SCROLL;
+  } else {
+    process.env.GOOGLE_CRAWLER_ALLOW_LEGACY_SCROLL = originalLegacyScroll;
+  }
+});
 
 async function fixture(name: string): Promise<string> {
   return readFile(
@@ -144,10 +159,20 @@ describe("GoogleCrawler", () => {
     }
   });
 
+  it("applies the configured locale to the public Maps UI language", async () => {
+    const { crawler, page } = crawlerFor(
+      "<html><body><h1>Example Hotel</h1><p>No reviews yet.</p></body></html>",
+    );
+    const result = await crawler.crawl({ url: hotelUrl, locale: "en-US" });
+
+    expect(result.success).toBe(true);
+    expect(new URL(page.url()).searchParams.get("hl")).toBe("en");
+  });
+
   it("limits resource filtering to safe optional resources and analytics pings", () => {
-    expect(
-      shouldAbortRequest("document", "https://www.google.com/maps"),
-    ).toBe(false);
+    expect(shouldAbortRequest("document", "https://www.google.com/maps")).toBe(
+      false,
+    );
     for (const resourceType of [
       "script",
       "stylesheet",
@@ -165,15 +190,30 @@ describe("GoogleCrawler", () => {
     expect(
       shouldAbortRequest("ping", "https://www.google-analytics.com/collect"),
     ).toBe(true);
-    expect(
-      shouldAbortRequest("image", "https://example.com/image.jpg"),
-    ).toBe(true);
+    expect(shouldAbortRequest("image", "https://example.com/image.jpg")).toBe(
+      true,
+    );
     expect(
       shouldAbortRequest("font", "https://fonts.gstatic.com/font.woff2"),
     ).toBe(false);
     expect(
       shouldAbortRequest("image", "https://www.google.com/maps/thumbnail"),
     ).toBe(false);
+  });
+
+  it("detects when a page exposes measurable DOM scrolling capabilities", () => {
+    const fixturePage = new FixturePage("<html><body></body></html>");
+    expect(supportsDomScrolling(fixturePage)).toBe(false);
+    expect(
+      supportsDomScrolling({
+        ...fixturePage,
+        evaluate: async () => null,
+        mouse: {
+          move: async () => {},
+          wheel: async () => {},
+        },
+      }),
+    ).toBe(true);
   });
 
   it("uses load navigation by default and enables domcontentloaded only with the optimization flag", async () => {
@@ -191,7 +231,7 @@ describe("GoogleCrawler", () => {
       });
       await defaultCrawler.crawl({ url: hotelUrl });
       expect(defaultGoto).toHaveBeenCalledWith(
-        hotelUrl,
+        `${hotelUrl}?hl=en`,
         expect.objectContaining({ waitUntil: "load" }),
       );
 
@@ -211,7 +251,7 @@ describe("GoogleCrawler", () => {
         });
         await optimizedCrawler.crawl({ url: hotelUrl });
         expect(optimizedGoto).toHaveBeenCalledWith(
-          hotelUrl,
+          `${hotelUrl}?hl=en`,
           expect.objectContaining({ waitUntil: "domcontentloaded" }),
         );
       } finally {
@@ -237,15 +277,15 @@ describe("GoogleCrawler", () => {
     expect(limited.reviews).toHaveLength(1);
     expect(limited.diagnostics.pagesVisited).toBe(1);
     expect(paged.diagnostics.pagesVisited).toBe(2);
-    expect(paged.diagnostics.duplicatesRemoved).toBe(1);
+    expect(paged.diagnostics.duplicatesRemoved).toBe(0);
     expect(paged.reviews).toHaveLength(1);
   });
 
   it("opens the French Plus d'avis control when it is publicly visible", async () => {
     const html =
-      '<html><body><h1>Example Hotel</h1>' +
+      "<html><body><h1>Example Hotel</h1>" +
       '<article data-review-id="review-1"><span data-rating aria-label="5 stars"></span>' +
-      '<span data-review-text>Premier avis.</span></article>' +
+      "<span data-review-text>Premier avis.</span></article>" +
       '<button data-load-more data-next-review-id="review-2" ' +
       'data-next-rating="4 stars" data-next-comment="Deuxième avis.">Plus d\'avis</button>' +
       "</body></html>";
@@ -517,7 +557,7 @@ describe("GoogleCrawler", () => {
     const restoreInteract = setEnvironment("GOOGLE_CRAWLER_INTERACT", "true");
     try {
       const { crawler, page } = crawlerFor(
-        '<html><head><title>Google Maps</title></head><body>' +
+        "<html><head><title>Google Maps</title></head><body>" +
           '<button role="tab" aria-label="Reviews" data-action="open-reviews">Reviews</button>' +
           '<section role="region" aria-label="Reviews" data-reviews-panel hidden></section>' +
           "<template data-reviews-content>" +
@@ -539,7 +579,7 @@ describe("GoogleCrawler", () => {
     const restoreInteract = setEnvironment("GOOGLE_CRAWLER_INTERACT", "true");
     try {
       const { crawler, page } = crawlerFor(
-        '<html><head><title>Google Maps</title></head><body>Collapse side panel</body></html>',
+        "<html><head><title>Google Maps</title></head><body>Collapse side panel</body></html>",
       );
       const result = await crawler.crawl({ url: hotelUrl });
 
@@ -625,6 +665,58 @@ describe("GoogleCrawler", () => {
     }
   });
 
+  it("opens a localized More reviews link to load beyond the preview cards", async () => {
+    const restoreInteract = setEnvironment("GOOGLE_CRAWLER_INTERACT", "true");
+    try {
+      const { crawler, page } = crawlerFor(
+        "<html><body><h1>Example Hotel</h1>" +
+          '<section role="region" aria-label="Reviews">' +
+          '<article data-review-id="review-1"><span data-rating aria-label="5 out of 5 stars"></span>' +
+          "<span data-review-text>First review.</span></article>" +
+          '<a role="link" aria-label="View all 12 reviews" data-load-more ' +
+          'data-next-review-id="review-2" data-next-rating="4 out of 5 stars" ' +
+          'data-next-comment="Second review.">View all 12 reviews</a></section></body></html>',
+      );
+      const result = await crawler.crawl({ url: hotelUrl });
+
+      expect(result.success).toBe(true);
+      expect(result.reviews).toHaveLength(2);
+      expect(result.diagnostics.moreReviewsControlClicked).toBe(true);
+    } finally {
+      restoreInteract();
+    }
+  });
+
+  it("clicks the localized original-text control before parsing a translated review", async () => {
+    const restoreInteract = setEnvironment("GOOGLE_CRAWLER_INTERACT", "true");
+    try {
+      const { crawler, page } = crawlerFor(
+        "<html><body><h1>Example Hotel</h1>" +
+          '<article data-review-id="review-original-1">' +
+          '<span data-rating aria-label="5 out of 5 stars"></span>' +
+          '<span data-review-text lang="ar">إقامة رائعة.</span>' +
+          '<button aria-label="عرض النص الأصلي" data-action="show-original" ' +
+          'data-original-language="de" data-original-text="Sehr gut.">عرض النص الأصلي</button>' +
+          "</article></body></html>",
+      );
+      const result = await crawler.crawl({ url: hotelUrl });
+
+      expect(result.success).toBe(true);
+      expect(page.originalLanguageClickCount).toBe(1);
+      expect(result.reviews[0]).toMatchObject({
+        comment: "Sehr gut.",
+        language: "de",
+      });
+      expect(result.diagnostics).toMatchObject({
+        originalLanguageControlsFound: 1,
+        originalLanguageControlsClicked: 1,
+        originalLanguageControlsChanged: 1,
+      });
+    } finally {
+      restoreInteract();
+    }
+  });
+
   it("does not click Reviews controls on challenge pages", async () => {
     const restoreInteract = setEnvironment("GOOGLE_CRAWLER_INTERACT", "true");
     try {
@@ -673,6 +765,7 @@ describe("GoogleCrawler", () => {
   it("uses the configured review limit and records new cards for each scroll", async () => {
     const restoreLimit = setEnvironment("GOOGLE_MAX_REVIEWS_PER_RUN", "10");
     const restoreInteract = setEnvironment("GOOGLE_CRAWLER_INTERACT", "true");
+    const restoreNoProgress = setEnvironment("GOOGLE_NO_PROGRESS_LIMIT", "1");
     try {
       const { crawler, page } = crawlerFor(scrollableReviewFixture());
       const result = await crawler.crawl({ url: hotelUrl });
@@ -690,9 +783,10 @@ describe("GoogleCrawler", () => {
         paginationStoppedBecause: "no_load_more_button",
       });
       expect(
-        page.waitDurations.filter((duration) => duration === 1_000),
-      ).toHaveLength(2);
+        page.waitDurations.filter((duration) => duration > 0).length,
+      ).toBeGreaterThan(1);
     } finally {
+      restoreNoProgress();
       restoreInteract();
       restoreLimit();
     }
@@ -717,7 +811,7 @@ describe("GoogleCrawler", () => {
         stoppedBecause: "max_reviews_reached",
       });
       expect(
-        page.waitDurations.filter((duration) => duration === 1_000),
+        page.waitDurations.filter((duration) => duration === 200),
       ).toHaveLength(1);
     } finally {
       restoreInteract();

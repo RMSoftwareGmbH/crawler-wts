@@ -5,3 +5,6 @@ export * from "./GoogleSelectors.js";
 export * from "./GooglePagination.js";
 export * from "./GoogleMapper.js";
 export * from "./GoogleReviewInteraction.js";
+export * from "./GoogleScrollConfig.js";
+export * from "./GoogleScrollRoot.js";
+export * from "./GoogleLabels.js";

@@ -22,9 +22,11 @@ Fixture-driven parser and crawler tests are under
 
 For Google Maps diagnostics, set `GOOGLE_CRAWLER_HEADED=true` to launch a visible browser
 and `GOOGLE_CRAWLER_INTERACT=true` to click a visible Reviews/Avis control, expand
-normal review text controls, and incrementally scroll the review panel. Interaction
-stops on challenge, consent, authentication or blocked pages; it does not bypass
-access controls. A screenshot is saved to the operating system's temporary directory
+normal review text controls, restore original review text when a visible
+translation toggle is available, and incrementally scroll the review panel. It
+also opens a visible full-reviews control when available. Interaction stops on
+challenge, consent, authentication or blocked pages; it does not bypass access
+controls. A screenshot is saved to the operating system's temporary directory
 only when `GOOGLE_CRAWLER_DIAGNOSTIC_SCREENSHOT=true`. Review cards and images are
 masked in diagnostic screenshots.
 
@@ -43,8 +45,12 @@ When enabled, filtering only considers non-Google image/media/font resources
 and analytics ping requests; document, script, stylesheet, XHR, fetch,
 websocket, and Google Maps application requests are allowed.
 Set `GOOGLE_CRAWLER_LOCALE` (or the request's `locale`) to configure both the
-browser context locale and matching `Accept-Language` header. Selector matching
-supports localized Reviews/Avis labels independently of this setting.
+browser context locale, matching `Accept-Language` header, and the Maps `hl`
+interface-language parameter. Selector matching supports localized Reviews/Avis
+labels independently of this setting. The locale controls Google Maps'
+interface language, not the language of review content;
+the crawler clicks a visible original-text toggle when Google provides one. If
+there is no such control, it preserves the review text Google displays.
 
 Incremental requests may provide `lastSeenReviewId`,
 `lastSuccessfulCrawlAt`, and/or `persistedReviewIds` to stop at a known review,

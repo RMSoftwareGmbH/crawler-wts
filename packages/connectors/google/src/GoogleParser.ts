@@ -36,6 +36,8 @@ export interface GoogleParseResult {
 export interface GoogleParserOptions {
   lastSeenReviewId?: string;
   persistedReviewIds?: readonly string[];
+  /** Cards whose stable id is in this set are skipped without being parsed. */
+  skipReviewIds?: ReadonlySet<string>;
 }
 
 async function firstText(
@@ -128,6 +130,23 @@ async function firstDate(card: CrawlerLocator): Promise<string | undefined> {
   return undefined;
 }
 
+async function reviewLanguage(
+  card: CrawlerLocator,
+): Promise<string | undefined> {
+  const comment = card.locator(selectorList(GoogleSelectors.comments)).first();
+  if ((await comment.count()) > 0) {
+    const language = normalizeText(await comment.getAttribute("lang"));
+    if (language) {
+      return language;
+    }
+    const nestedLanguage = await firstAttribute(comment, ["[lang]"], "lang");
+    if (nestedLanguage) {
+      return nestedLanguage;
+    }
+  }
+  return firstAttribute(card, ["[lang]"], "lang");
+}
+
 function publicUrl(
   value: string | undefined,
   baseUrl: string,
@@ -171,6 +190,9 @@ export class GoogleParser {
         break;
       }
       if (stableId && persistedReviewIds.has(stableId)) {
+        continue;
+      }
+      if (stableId && options.skipReviewIds?.has(stableId)) {
         continue;
       }
       const rawRating = await firstRating(card);
@@ -228,7 +250,7 @@ export class GoogleParser {
       }
 
       const authorProfileUrl = publicUrl(profileHref, hotelUrl);
-      const language = await firstAttribute(card, ["[lang]"], "lang");
+      const language = await reviewLanguage(card);
       reviews.push({
         externalReviewId,
         ...(sourceUrl ? { sourceUrl } : {}),
