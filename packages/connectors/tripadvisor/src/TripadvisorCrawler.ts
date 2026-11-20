@@ -137,6 +137,15 @@ export class TripadvisorCrawler {
       diagnostics.finalUrl = safeUrl(session.page.url());
       diagnostics.documentTitle = await session.page.title();
       diagnostics.navigationStatus = response?.status?.();
+      if (
+        diagnostics.navigationStatus === 403 ||
+        diagnostics.navigationStatus === 429
+      ) {
+        throw new CrawlError(
+          "blocked_page",
+          `Tripadvisor returned HTTP ${diagnostics.navigationStatus}.`,
+        );
+      }
       const pageText = await session.page.locator("body").innerText();
       const protection = classificationForPage(
         pageText,

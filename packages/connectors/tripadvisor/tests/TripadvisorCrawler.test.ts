@@ -53,4 +53,18 @@ describe("TripadvisorCrawler", () => {
     expect(result.diagnostics.failure?.classification).toBe("consent_page");
     expect(result.diagnostics.consentPageDetected).toBe(true);
   });
+
+  it("classifies HTTP 403 as a blocked page instead of a successful empty crawl", async () => {
+    const page = new FixturePage(
+      "<html><head><title>tripadvisor.de</title></head><body>Forbidden</body></html>",
+      403,
+    );
+    const result = await new TripadvisorCrawler({
+      sessionFactory: async () => session(page),
+    }).crawl({ url });
+    expect(result.success).toBe(false);
+    expect(result.reviews).toEqual([]);
+    expect(result.diagnostics.navigationStatus).toBe(403);
+    expect(result.diagnostics.failure?.classification).toBe("blocked_page");
+  });
 });
