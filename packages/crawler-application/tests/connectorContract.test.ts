@@ -63,7 +63,7 @@ const cases: ConnectorContractCase[] = [
     source: "booking",
     url: "https://www.booking.com/hotel/us/example-hotel.html",
     fixture: new URL(
-      "../../connectors/booking/tests/fixtures/review-cards.html",
+      "../../connectors/booking/tests/fixtures/hotel-with-guest-reviews.html",
       import.meta.url,
     ),
     createConnector: (page) =>

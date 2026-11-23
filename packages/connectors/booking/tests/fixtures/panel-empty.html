@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <body>
+    <h1 data-testid="title">Example Hotel</h1>
+    <button type="button" aria-label="Guest reviews" data-action="open-reviews">
+      Guest Reviews
+    </button>
+    <section
+      role="dialog"
+      aria-label="Guest reviews"
+      data-testid="reviews-panel"
+      data-reviews-panel
+      hidden
+    ></section>
+    <template data-reviews-content>
+      <header>Guest Reviews</header>
+      <p>The review list could not be loaded.</p>
+    </template>
+  </body>
+</html>

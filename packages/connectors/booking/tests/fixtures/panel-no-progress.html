@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <body>
+    <h1 data-testid="title">Example Hotel</h1>
+    <button type="button" aria-label="Guest reviews" data-action="open-reviews">
+      Reviews
+    </button>
+    <section
+      role="dialog"
+      aria-label="Guest reviews"
+      data-testid="reviews-panel"
+      data-reviews-panel
+      hidden
+    ></section>
+    <template data-reviews-content>
+      <header>Guest Reviews</header>
+      <article data-testid="review-card" data-review-id="repeat-review">
+        <div data-testid="review-score">8</div>
+        <p data-testid="review-text">No new reviews load.</p>
+      </article>
+      <button data-testid="pagination-next-button" data-load-more>
+        Next reviews
+      </button>
+    </template>
+  </body>
+</html>

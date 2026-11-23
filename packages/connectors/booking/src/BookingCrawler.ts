@@ -14,6 +14,8 @@ import {
   type CrawlFailureClassification,
   type CrawlRequest,
   type CrawlResult,
+  type CrawlerLocator,
+  type CrawlerPage,
 } from "../../../crawler-core/src/index.js";
 import {
   deduplicateReviews,
@@ -22,6 +24,7 @@ import {
 import { BookingMapper } from "./BookingMapper.js";
 import { BookingPagination } from "./BookingPagination.js";
 import { BookingParser } from "./BookingParser.js";
+import { BookingReviewInteraction } from "./BookingReviewInteraction.js";
 import {
   BookingSelectors as S,
   bookingSelectorList,
@@ -34,11 +37,15 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_RETRIES = 1;
 const DEFAULT_RETRY_BASE_DELAY_MS = 400;
 const DEFAULT_PAGE_DELAY_MS = 1_000;
+const MAX_CONTENT_READY_WAIT_MS = 3_000;
+const CONTENT_READY_POLL_MS = 150;
+const MAX_PAGINATION_WAIT_MS = 1_500;
 
 type CrawlStage =
   | "validation"
   | "navigation"
   | "detection"
+  | "interaction"
   | "pagination"
   | "parser"
   | "mapping";
@@ -47,10 +54,12 @@ export interface BookingCrawlerOptions {
   sessionFactory?: (options: {
     proxyEnabled: boolean;
     locale?: string;
+    optimizationEnabled: false;
   }) => Promise<BrowserSession>;
   parser?: BookingParser;
   mapper?: BookingMapper;
   pagination?: BookingPagination;
+  reviewInteraction?: BookingReviewInteraction;
   now?: () => Date;
   maxRetries?: number;
   retryBaseDelayMs?: number;
@@ -68,6 +77,13 @@ function safeUrl(value: string): string {
   } catch {
     return "[invalid URL]";
   }
+}
+
+function safeTitle(value: string): string {
+  return value
+    .replace(/https?:\/\/[^\s"'<>]+/gi, (url) => safeUrl(url))
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function isBookingHotelUrl(value: string): boolean {
@@ -98,7 +114,7 @@ function protectionForPage(
 ): CrawlError | undefined {
   const content = `${title}\n${text}`;
   if (
-    /captcha|verify you are human|unusual traffic|robot check|challenge page|cloudflare/i.test(
+    /captcha|verify you are human|unusual traffic|robot check|challenge page|cloudflare|datadome|security check|verify your browser|checking your browser|enable javascript and cookies|\bchal_t=/i.test(
       content,
     )
   ) {
@@ -138,6 +154,126 @@ function protectionForPage(
     );
   }
   return undefined;
+}
+
+interface BookingPageSnapshot {
+  title: string;
+  bodyText: string;
+  bodyTextLength: number;
+  hotelContentMarkerCount: number;
+  reviewCardCount: number;
+  protection?: CrawlError;
+}
+
+async function inspectBookingPage(
+  page: CrawlerPage,
+): Promise<BookingPageSnapshot> {
+  const [title, bodyText, hotelNameCount, reviewCardCount, noReviewsCount] =
+    await Promise.all([
+      page.title(),
+      page.locator("body").innerText(),
+      page.locator(bookingSelectorList(S.hotelName)).count(),
+      page.locator(bookingSelectorList(S.reviewCards)).count(),
+      page.locator(bookingSelectorList(S.noReviews)).count(),
+    ]);
+  return {
+    title: safeTitle(title),
+    bodyText,
+    bodyTextLength: bodyText.length,
+    hotelContentMarkerCount: hotelNameCount + reviewCardCount + noReviewsCount,
+    reviewCardCount,
+    protection: protectionForPage(bodyText, title, reviewCardCount > 0),
+  };
+}
+
+async function waitForBookingContent(
+  page: CrawlerPage,
+  timeoutMs: number,
+): Promise<BookingPageSnapshot> {
+  const waitBudgetMs = Math.min(MAX_CONTENT_READY_WAIT_MS, timeoutMs);
+  const deadline = Date.now() + waitBudgetMs;
+  let scheduledWaitMs = 0;
+  let previousMarkerCount = -1;
+  let stableMarkerObservations = 0;
+  let snapshot = await inspectBookingPage(page);
+
+  while (true) {
+    if (snapshot.protection) return snapshot;
+
+    const hasHotelContent =
+      snapshot.hotelContentMarkerCount > 0 || noReviewsPage(snapshot.bodyText);
+    if (hasHotelContent) {
+      stableMarkerObservations =
+        snapshot.hotelContentMarkerCount === previousMarkerCount
+          ? stableMarkerObservations + 1
+          : 1;
+      if (stableMarkerObservations >= 2) return snapshot;
+    } else {
+      stableMarkerObservations = 0;
+    }
+    previousMarkerCount = snapshot.hotelContentMarkerCount;
+
+    const remainingMs = Math.min(
+      waitBudgetMs - scheduledWaitMs,
+      deadline - Date.now(),
+    );
+    if (remainingMs <= 0) return snapshot;
+    const delayMs = Math.min(CONTENT_READY_POLL_MS, remainingMs);
+    await page.waitForTimeout(delayMs);
+    scheduledWaitMs += delayMs;
+    snapshot = await inspectBookingPage(page);
+  }
+}
+
+async function reviewPanelSignature(panel: CrawlerLocator): Promise<string> {
+  const cards = panel.locator(bookingSelectorList(S.reviewCards));
+  const signatures: string[] = [];
+  for (let index = 0; index < (await cards.count()); index += 1) {
+    const card = cards.nth(index);
+    signatures.push(
+      `${(await card.getAttribute("data-review-id")) ?? ""}|${await card.innerText()}`,
+    );
+  }
+  return JSON.stringify(signatures);
+}
+
+async function waitForReviewPanelProgress(
+  page: CrawlerPage,
+  panel: CrawlerLocator,
+  previousSignature: string,
+  timeoutMs: number,
+): Promise<void> {
+  const waitBudgetMs = Math.min(MAX_PAGINATION_WAIT_MS, Math.max(0, timeoutMs));
+  const deadline = Date.now() + waitBudgetMs;
+  let scheduledWaitMs = 0;
+
+  while (scheduledWaitMs < waitBudgetMs && Date.now() < deadline) {
+    const remainingMs = Math.min(
+      waitBudgetMs - scheduledWaitMs,
+      deadline - Date.now(),
+    );
+    if (remainingMs <= 0) return;
+    const delayMs = Math.min(CONTENT_READY_POLL_MS, remainingMs);
+    await page.waitForTimeout(delayMs);
+    scheduledWaitMs += delayMs;
+    if ((await reviewPanelSignature(panel)) !== previousSignature) return;
+  }
+}
+
+function recordProtectionDiagnostics(
+  diagnostics: CrawlDiagnostics,
+  classification: CrawlFailureClassification,
+): void {
+  diagnostics.challengePageDetected = classification === "challenge_page";
+  diagnostics.consentPageDetected = classification === "consent_page";
+  diagnostics.authenticationPageDetected =
+    classification === "authentication_required";
+  diagnostics.interstitialPageDetected = [
+    "blocked_page",
+    "challenge_page",
+    "consent_page",
+    "authentication_required",
+  ].includes(classification);
 }
 
 function sanitizeFailureMessage(message: string): string {
@@ -199,6 +335,12 @@ function failureFor(
     return {
       classification: "pagination_failure",
       message: "Booking.com review pagination failed.",
+    };
+  }
+  if (stage === "interaction") {
+    return {
+      classification: "interaction_failure",
+      message: "Booking.com review interaction failed.",
     };
   }
   if (stage === "parser") {
@@ -269,6 +411,13 @@ export class BookingCrawler {
       challengePageDetected: false,
       authenticationPageDetected: false,
       restrictedMapsViewDetected: false,
+      guestReviewsControlFound: false,
+      guestReviewsControlClicked: false,
+      reviewPanelFound: false,
+      reviewCardCountBeforeClick: 0,
+      reviewCardCountAfterClick: 0,
+      paginationControlFound: false,
+      paginationClicks: 0,
     };
 
     let maxRetries: number;
@@ -328,6 +477,8 @@ export class BookingCrawler {
     const parser = this.options.parser ?? new BookingParser();
     const mapper = this.options.mapper ?? new BookingMapper();
     const pagination = this.options.pagination ?? new BookingPagination();
+    const reviewInteraction =
+      this.options.reviewInteraction ?? new BookingReviewInteraction();
     const persistedIds = new Set(request.persistedReviewIds ?? []);
     const lastSeenDate = request.lastSuccessfulCrawlAt
       ? Date.parse(request.lastSuccessfulCrawlAt)
@@ -349,10 +500,12 @@ export class BookingCrawler {
           ? await this.options.sessionFactory({
               proxyEnabled,
               ...(request.locale ? { locale: request.locale } : {}),
+              optimizationEnabled: false,
             })
           : await createBrowserSession({
               proxyEnabled,
               ...(request.locale ? { locale: request.locale } : {}),
+              optimizationEnabled: false,
             });
 
         const navigationStarted = Date.now();
@@ -363,8 +516,14 @@ export class BookingCrawler {
         diagnostics.navigationMs = Date.now() - navigationStarted;
         diagnostics.pagesVisited = 1;
         diagnostics.finalUrl = safeUrl(session.page.url());
-        diagnostics.documentTitle = await session.page.title();
+        diagnostics.documentTitle = safeTitle(await session.page.title());
         diagnostics.navigationStatus = response?.status?.();
+        diagnostics.interstitialPageDetected = false;
+        const initialSnapshot = await inspectBookingPage(session.page);
+        diagnostics.bodyTextLength = initialSnapshot.bodyTextLength;
+        diagnostics.hotelContentMarkerCount =
+          initialSnapshot.hotelContentMarkerCount;
+        diagnostics.reviewCardCount = initialSnapshot.reviewCardCount;
 
         if (diagnostics.navigationStatus === 401) {
           throw new CrawlError(
@@ -391,13 +550,79 @@ export class BookingCrawler {
           );
         }
 
+        const pageSnapshot = await waitForBookingContent(
+          session.page,
+          Math.max(0, timeoutMs - (Date.now() - navigationStarted)),
+        );
+        diagnostics.documentTitle = pageSnapshot.title;
+        diagnostics.bodyTextLength = pageSnapshot.bodyTextLength;
+        diagnostics.hotelContentMarkerCount =
+          pageSnapshot.hotelContentMarkerCount;
+        diagnostics.reviewCardCount = pageSnapshot.reviewCardCount;
+        if (pageSnapshot.protection) {
+          recordProtectionDiagnostics(
+            diagnostics,
+            pageSnapshot.protection.classification,
+          );
+          throw pageSnapshot.protection;
+        }
+
+        if (
+          pageSnapshot.hotelContentMarkerCount === 0 &&
+          !noReviewsPage(pageSnapshot.bodyText)
+        ) {
+          if (
+            diagnostics.navigationStatus === 202 &&
+            pageSnapshot.bodyTextLength === 0 &&
+            pageSnapshot.title.length === 0
+          ) {
+            throw new CrawlError(
+              "navigation_failure",
+              "Booking.com returned an empty HTTP 202 response without usable page content.",
+            );
+          }
+          throw new CrawlError(
+            "invalid_page",
+            "The page did not contain recognizable Booking.com hotel content.",
+          );
+        }
+
+        stage = "interaction";
+        const interactionResult = await reviewInteraction.open(
+          session.page,
+          Math.max(0, timeoutMs - (Date.now() - navigationStarted)),
+        );
+        diagnostics.guestReviewsControlFound =
+          interactionResult.guestReviewsControlFound;
+        diagnostics.guestReviewsControlClicked =
+          interactionResult.guestReviewsControlClicked;
+        diagnostics.reviewPanelFound = interactionResult.reviewPanelFound;
+        diagnostics.reviewPanelSelector = interactionResult.reviewPanelSelector;
+        diagnostics.reviewCardCountBeforeClick =
+          interactionResult.reviewCardCountBeforeClick;
+        diagnostics.reviewCardCountAfterClick =
+          interactionResult.reviewCardCountAfterClick;
+        diagnostics.reviewCardCount =
+          interactionResult.reviewCardCountAfterClick;
+        diagnostics.interactionStoppedBecause =
+          interactionResult.interactionStoppedBecause;
+        if (interactionResult.failure) throw interactionResult.failure;
+        const reviewPanel = interactionResult.panel;
+        if (!reviewPanel) {
+          diagnostics.interactionStoppedBecause ??= "review_panel_unavailable";
+          throw new CrawlError(
+            "interaction_failure",
+            "Booking.com review panel was not available after interaction.",
+          );
+        }
+
         let totalExtracted = 0;
         let stopped = false;
         stage = "detection";
 
         for (let pageNumber = 1; pageNumber <= maxPages; pageNumber += 1) {
-          const pageText = await session.page.locator("body").innerText();
-          const cardCount = await session.page
+          const pageText = await reviewPanel.innerText();
+          const cardCount = await reviewPanel
             .locator(bookingSelectorList(S.reviewCards))
             .count();
           diagnostics.reviewCardCount = cardCount;
@@ -409,20 +634,27 @@ export class BookingCrawler {
           );
           if (protection) throw protection;
 
-          if (cardCount === 0 && !noReviewsPage(pageText)) {
-            const hotelTitleCount = await session.page
-              .locator(bookingSelectorList(S.hotelName))
-              .count();
-            if (hotelTitleCount === 0) {
-              throw new CrawlError(
-                "invalid_page",
-                "The page did not contain recognizable Booking.com hotel content.",
-              );
-            }
+          if (cardCount === 0 && noReviewsPage(pageText)) {
+            diagnostics.interactionStoppedBecause = "no_reviews_available";
+            throw new CrawlError(
+              "no_reviews_available",
+              "Booking.com review panel reports no available reviews.",
+            );
+          }
+          if (cardCount === 0) {
+            diagnostics.interactionStoppedBecause = "review_panel_has_no_cards";
+            throw new CrawlError(
+              "selector_drift",
+              "Booking.com review panel contained no recognizable review cards.",
+            );
           }
 
           stage = "parser";
-          const parsed = await parser.parse(session.page, request.url);
+          const parsed = await parser.parse(
+            session.page,
+            request.url,
+            reviewPanel,
+          );
           totalExtracted += parsed.length;
           diagnostics.reviewsExtracted = totalExtracted;
           let newCardsOnPage = 0;
@@ -466,39 +698,64 @@ export class BookingCrawler {
 
           if (pageNumber > 1 && newCardsOnPage === 0) {
             diagnostics.stoppedBecause = "no_progress";
+            diagnostics.paginationStoppedBecause = "no_progress";
+            diagnostics.interactionStoppedBecause = "pagination_no_progress";
             stopped = true;
             break;
           }
           if (pageNumber >= maxPages) {
             diagnostics.stoppedBecause = "max_pages";
+            diagnostics.paginationStoppedBecause = "max_pages";
             break;
           }
 
           stage = "pagination";
-          if (!(await pagination.next(session.page))) {
-            diagnostics.stoppedBecause = noReviewsPage(pageText)
-              ? "no_reviews"
+          const remainingTimeoutMs = Math.max(
+            0,
+            timeoutMs - (Date.now() - navigationStarted),
+          );
+          if (remainingTimeoutMs <= 0) {
+            throw new CrawlError(
+              "timeout",
+              "Booking.com crawl exceeded its configured timeout.",
+            );
+          }
+          const previousPanelSignature =
+            await reviewPanelSignature(reviewPanel);
+          const paginationResult = await pagination.next(
+            reviewPanel,
+            remainingTimeoutMs,
+          );
+          diagnostics.paginationControlFound ||= paginationResult.controlFound;
+          if (!paginationResult.clicked) {
+            diagnostics.stoppedBecause = paginationResult.controlFound
+              ? "pagination_control_disabled"
               : "no_next_page_control";
+            diagnostics.paginationStoppedBecause = diagnostics.stoppedBecause;
             break;
           }
-          await session.page.waitForTimeout(pageDelayMs);
+          diagnostics.paginationClicks =
+            (diagnostics.paginationClicks ?? 0) + 1;
+          const paginationWaitMs = Math.min(
+            pageDelayMs,
+            Math.max(0, timeoutMs - (Date.now() - navigationStarted)),
+          );
+          await waitForReviewPanelProgress(
+            session.page,
+            reviewPanel,
+            previousPanelSignature,
+            paginationWaitMs,
+          );
           diagnostics.pagesVisited += 1;
-          diagnostics.finalUrl = safeUrl(session.page.url());
-          diagnostics.documentTitle = await session.page.title();
           stage = "detection";
         }
 
-        if (
-          totalExtracted === 0 &&
-          diagnostics.stoppedBecause !== "no_reviews"
-        ) {
-          const pageText = await session.page.locator("body").innerText();
-          if (!noReviewsPage(pageText)) {
-            throw new CrawlError(
-              "selector_drift",
-              "Booking.com did not render recognizable hotel reviews.",
-            );
-          }
+        if (totalExtracted === 0) {
+          diagnostics.interactionStoppedBecause = "review_cards_unparsed";
+          throw new CrawlError(
+            "selector_drift",
+            "Booking.com review cards were present but could not be parsed.",
+          );
         }
 
         stage = "mapping";
@@ -517,6 +774,12 @@ export class BookingCrawler {
           failure.classification === "consent_page";
         diagnostics.authenticationPageDetected =
           failure.classification === "authentication_required";
+        diagnostics.interstitialPageDetected = [
+          "blocked_page",
+          "challenge_page",
+          "consent_page",
+          "authentication_required",
+        ].includes(failure.classification);
       } finally {
         if (session) {
           try {

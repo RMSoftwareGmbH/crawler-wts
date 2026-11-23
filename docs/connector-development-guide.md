@@ -79,15 +79,18 @@ pages are reported as failures; the connector does not attempt to bypass them.
 Fixture-driven parser and crawler tests are under
 `packages/connectors/tripadvisor/tests`.
 
-The Booking connector accepts hotel pages under `booking.com/hotel/...`, reads
-visible review cards, and follows visible review pagination controls. It stops
-at the request's `maxReviews` (default 100) or `maxPages` (default 10), on a
-page with no new review IDs, or when there is no next-page control. Booking's
-ten-point scores are normalized to the canonical five-point scale. Public
-review IDs are preferred; otherwise a deterministic hash of the hotel URL and
-stable review fields is used, never a card index. Challenge, consent,
-authentication, and blocked pages are failures; the connector does not bypass
-them. Fixture-driven tests are under `packages/connectors/booking/tests`.
+The Booking connector accepts hotel pages under `booking.com/hotel/...`, opens
+the visible, localized Guest Reviews control, and parses cards only from the
+visible review panel. Pagination is scoped to that panel. It stops at the
+request's `maxReviews` (default 100) or `maxPages` (default 10), on a page with
+no new review IDs, or when there is no next-page control. Booking's ten-point
+scores are normalized to the canonical five-point scale. Public review IDs are
+preferred; otherwise a deterministic hash of the hotel URL and stable review
+fields is used, never a card index. A panel that explicitly reports no reviews
+is a `no_reviews_available` failure; an opened panel without recognizable
+review cards is a `selector_drift` failure. Challenge, consent, authentication,
+and blocked pages are failures; the connector does not bypass them.
+Fixture-driven tests are under `packages/connectors/booking/tests`.
 
 The Expedia connector accepts public Expedia hotel-detail URLs, parses visible
 review cards, and follows visible next-page controls. It stops at `maxReviews`

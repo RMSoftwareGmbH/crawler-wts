@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <title>Example hotel</title>
+  </head>
+  <body>
+    <h1 data-testid="title">Example Hotel</h1>
+    <button
+      type="button"
+      role="tab"
+      aria-label="Guest reviews"
+      data-testid="guest-reviews-tab"
+      data-action="open-reviews"
+    >
+      Guest Reviews
+    </button>
+    <section
+      role="dialog"
+      aria-label="Guest reviews"
+      data-testid="reviews-panel"
+      data-reviews-panel
+      hidden
+    ></section>
+    <template data-reviews-content>
+      <header>Guest Reviews</header>
+      <article data-testid="review-card" data-review-id="fixture-review-001">
+        <div data-testid="review-score">9.0</div>
+        <p data-testid="review-text">The stay was comfortable.</p>
+        <div data-testid="reviewer-name">Fixture Guest</div>
+        <time data-testid="review-date">Reviewed: 12 June 2026</time>
+      </article>
+    </template>
+  </body>
+</html>

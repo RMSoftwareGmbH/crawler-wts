@@ -102,11 +102,12 @@ export class BookingParser {
   async parse(
     page: CrawlerPage,
     sourceUrl = page.url(),
+    root?: CrawlerLocator,
   ): Promise<ParsedBookingReview[]> {
     const sanitizedSourceUrl = publicUrl(sourceUrl, sourceUrl);
     if (!sanitizedSourceUrl) return [];
 
-    const cards = page.locator(bookingSelectorList(S.reviewCards));
+    const cards = (root ?? page).locator(bookingSelectorList(S.reviewCards));
     const parsed: ParsedBookingReview[] = [];
     for (let index = 0; index < (await cards.count()); index += 1) {
       const card = cards.nth(index);

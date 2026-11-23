@@ -314,10 +314,19 @@ export class FixturePage implements CrawlerPage {
     const rating = buttonAttributes["data-next-rating"];
     const comment = buttonAttributes["data-next-comment"];
     if (reviewId && rating && comment) {
-      this.html = this.html.replace(
-        /<\/body>/i,
-        `<article data-review-id="${reviewId}"><span data-rating aria-label="${rating}"></span><span data-review-text>${comment}</span></article></body>`,
-      );
+      const reviewMarkup =
+        `<article data-review-id="${reviewId}"><span data-rating aria-label="${rating}"></span>` +
+        `<span data-review-text>${comment}</span></article>`;
+      const targetId = buttonAttributes["data-load-target"];
+      if (targetId === "reviews-panel") {
+        this.html = this.html.replace(
+          /(<section\b[^>]*data-testid=["']reviews-panel["'][^>]*>)([\s\S]*?)(<\/section>)/i,
+          (_match, opening, content, closing) =>
+            `${opening}${content}${reviewMarkup}${closing}`,
+        );
+      } else {
+        this.html = this.html.replace(/<\/body>/i, `${reviewMarkup}</body>`);
+      }
     }
     this.html = this.html.replace(
       /<(?:button|a)\b[^>]*data-load-more[^>]*>[\s\S]*?<\/(?:button|a)>/i,

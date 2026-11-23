@@ -12,6 +12,7 @@ export type CrawlFailureClassification =
   | "authentication_required"
   | "selector_drift"
   | "interaction_failure"
+  | "no_reviews_available"
   | "invalid_page"
   | "parser_failure"
   | "schema_validation_failure"
@@ -41,6 +42,18 @@ export interface CrawlDiagnostics {
   documentTitle?: string;
   navigationStatus?: number;
   navigationMs?: number;
+  bodyTextLength?: number;
+  hotelContentMarkerCount?: number;
+  interstitialPageDetected?: boolean;
+  guestReviewsControlFound?: boolean;
+  guestReviewsControlClicked?: boolean;
+  reviewPanelFound?: boolean;
+  reviewPanelSelector?: string;
+  reviewCardCountBeforeClick?: number;
+  reviewCardCountAfterClick?: number;
+  paginationControlFound?: boolean;
+  paginationClicks?: number;
+  interactionStoppedBecause?: string;
   interactionEnabled?: boolean;
   settleWaitMs?: number;
   optimizationEnabled?: boolean;
@@ -55,8 +68,6 @@ export interface CrawlDiagnostics {
   reviewsControlClicked?: boolean;
   reviewsPanelFound?: boolean;
   moreReviewsControlClicked?: boolean;
-  reviewCardCountBeforeClick?: number;
-  reviewCardCountAfterClick?: number;
   maxReviewsPerRun?: number;
   reviewCardCountBeforeScroll?: number;
   reviewCardCountAfterEachScroll?: number[];
