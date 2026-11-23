@@ -111,10 +111,13 @@ function protectionForPage(
   text: string,
   title: string,
   hasReviewCards: boolean,
+  currentUrl = "",
+  challengeContainerCount = 0,
 ): CrawlError | undefined {
-  const content = `${title}\n${text}`;
+  const content = `${title}\n${text}\n${currentUrl}`;
   if (
-    /captcha|verify you are human|unusual traffic|robot check|challenge page|cloudflare|datadome|security check|verify your browser|checking your browser|enable javascript and cookies|\bchal_t=/i.test(
+    challengeContainerCount > 0 ||
+    /captcha|verify you are human|unusual traffic|robot check|challenge page|cloudflare|datadome|awswaf|awsWafCookieDomainList|security check|verify your browser|checking your browser|enable javascript and cookies|\bchal_t=/i.test(
       content,
     )
   ) {
@@ -162,27 +165,47 @@ interface BookingPageSnapshot {
   bodyTextLength: number;
   hotelContentMarkerCount: number;
   reviewCardCount: number;
+  currentUrl: string;
+  challengeContainerCount: number;
   protection?: CrawlError;
 }
 
 async function inspectBookingPage(
   page: CrawlerPage,
 ): Promise<BookingPageSnapshot> {
-  const [title, bodyText, hotelNameCount, reviewCardCount, noReviewsCount] =
-    await Promise.all([
-      page.title(),
-      page.locator("body").innerText(),
-      page.locator(bookingSelectorList(S.hotelName)).count(),
-      page.locator(bookingSelectorList(S.reviewCards)).count(),
-      page.locator(bookingSelectorList(S.noReviews)).count(),
-    ]);
+  const [
+    title,
+    bodyText,
+    hotelNameCount,
+    reviewCardCount,
+    noReviewsCount,
+    currentUrl,
+    challengeContainerCount,
+  ] = await Promise.all([
+    page.title(),
+    page.locator("body").innerText(),
+    page.locator(bookingSelectorList(S.hotelName)).count(),
+    page.locator(bookingSelectorList(S.reviewCards)).count(),
+    page.locator(bookingSelectorList(S.noReviews)).count(),
+    Promise.resolve(page.url()),
+    page.locator("[id='challenge-container']").count(),
+  ]);
+  const protection = protectionForPage(
+    bodyText,
+    title,
+    reviewCardCount > 0,
+    currentUrl,
+    challengeContainerCount,
+  );
   return {
     title: safeTitle(title),
     bodyText,
     bodyTextLength: bodyText.length,
     hotelContentMarkerCount: hotelNameCount + reviewCardCount + noReviewsCount,
     reviewCardCount,
-    protection: protectionForPage(bodyText, title, reviewCardCount > 0),
+    currentUrl,
+    challengeContainerCount,
+    protection,
   };
 }
 

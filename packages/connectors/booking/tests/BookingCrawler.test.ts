@@ -396,6 +396,28 @@ describe("BookingCrawler", () => {
     expect(JSON.stringify(result)).not.toContain("fixture-token");
   });
 
+  it("classifies the AWS WAF challenge container from an HTTP 202 response", async () => {
+    const page = new FixturePage(
+      await readBookingFixture("http-202-aws-waf.html"),
+      202,
+    );
+    const result = await new BookingCrawler({
+      sessionFactory: async () => session(page),
+      maxRetries: 0,
+    }).crawl({ url: hotelUrl });
+
+    expect(result.success).toBe(false);
+    expect(result.diagnostics).toMatchObject({
+      navigationStatus: 202,
+      challengePageDetected: true,
+      interstitialPageDetected: true,
+      pageClassification: "challenge_page",
+    });
+    expect(result.diagnostics.failure?.message).toBe(
+      "Booking.com served a challenge page.",
+    );
+  });
+
   it.each([
     ["consent.html", "consent_page", "consentPageDetected"],
     ["challenge.html", "challenge_page", "challengePageDetected"],
