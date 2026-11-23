@@ -77,8 +77,12 @@ function isExpediaHotelUrl(value: string): boolean {
       !url.username &&
       !url.password &&
       (url.hostname === "expedia.com" ||
-        url.hostname.endsWith(".expedia.com")) &&
-      /(?:\/hotel\/[^/]+\/[^/]+|\/[^/]*hotel-[^/]+)/i.test(url.pathname)
+        url.hostname.endsWith(".expedia.com") ||
+        url.hostname === "expedia.net" ||
+        url.hostname.endsWith(".expedia.net")) &&
+      /(?:\/hotel\/[^/]+\/[^/]+|\/[^/]*hotels?-[^/]+|\/hotel-information\.)/i.test(
+        url.pathname,
+      )
     );
   } catch {
     return false;
