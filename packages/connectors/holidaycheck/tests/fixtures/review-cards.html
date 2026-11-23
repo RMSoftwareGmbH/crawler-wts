@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <title>Hotelbewertungen Beispielhotel</title>
+  </head>
+  <body>
+    <h1 data-testid="hotel-name">Beispielhotel</h1>
+    <section data-testid="reviews-list">
+      <article
+        data-testid="review-card"
+        data-review-id="holidaycheck-review-001"
+      >
+        <div data-testid="review-rating" aria-label="5,5 von 6">5,5</div>
+        <h3 data-testid="review-title">Sehr schöner Aufenthalt</h3>
+        <span data-testid="review-author">Alex Beispiel</span>
+        <time data-testid="review-date" datetime="2026-06-12">
+          12. Juni 2026
+        </time>
+        <p data-testid="review-text" lang="de">
+          Das Zimmer war sauber und das Personal freundlich.
+        </p>
+        <div data-testid="hotel-response">Vielen Dank für Ihre Bewertung.</div>
+      </article>
+      <article data-testid="review">
+        <span data-testid="rating" data-rating="4.8"></span>
+        <h3 data-testid="review-title">Gute Lage</h3>
+        <p data-testid="review-text">Ruhig und gut erreichbar.</p>
+      </article>
+    </section>
+  </body>
+</html>

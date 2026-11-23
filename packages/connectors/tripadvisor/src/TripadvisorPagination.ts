@@ -12,7 +12,8 @@ export interface TripadvisorPaginationOptions {
 
 export interface TripadvisorPaginationResult {
   pagesVisited: number;
-  stoppedBecause: string;
+  stoppedBecause:
+    "max_pages" | "max_reviews" | "no_load_more_control" | "no_progress";
   reviewCount: number;
 }
 
@@ -23,7 +24,8 @@ export class TripadvisorPagination {
   ): Promise<TripadvisorPaginationResult> {
     let pagesVisited = 1;
     let previousCount = await page.locator(selectorList(S.reviewCards)).count();
-    let stoppedBecause = "max_pages";
+    let stoppedBecause: TripadvisorPaginationResult["stoppedBecause"] =
+      "max_pages";
     while (
       pagesVisited < Math.max(1, options.maxPages) &&
       previousCount < options.maxReviews

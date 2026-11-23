@@ -1,88 +1,117 @@
-﻿import { parseArgs } from 'node:util';
-import 'dotenv/config';
-import { GoogleCrawler } from '../packages/connectors/google/src/GoogleCrawler.js';
+import "dotenv/config";
+import {
+  CrawlAndPersistService,
+  createReviewConnector,
+  loadRuntimeEnvironment,
+} from "../packages/crawler-application/src/index.js";
+import { MongoClientProvider } from "../packages/review-persistence/src/mongoClientProvider.js";
+import { ReviewPersistenceService } from "../packages/review-persistence/src/ReviewPersistenceService.js";
+import type { CrawlAndPersistResult } from "../packages/crawler-application/src/CrawlAndPersistService.js";
+import type { RuntimeEnvironment } from "../packages/crawler-application/src/runtimeEnvironment.js";
+import { CONNECTOR_CLI_USAGE, parseConnectorCliArgs } from "./connectorCli.js";
 
-const { values } = parseArgs({
-  options: {
-    connector: { type: 'string' },
-    url: { type: 'string', multiple: true },
-    'max-pages': { type: 'string' },
-    'max-reviews': { type: 'string' },
-    timeout: { type: 'string' },
-    locale: { type: 'string' },
-    'last-seen-review-id': { type: 'string' },
-    'last-successful-crawl-at': { type: 'string' },
-    'persisted-review-id': { type: 'string', multiple: true },
-    proxy: { type: 'boolean', default: false },
-    'no-proxy': { type: 'boolean', default: false }
-  }
-});
+function safeErrorMessage(error: unknown): string {
+  const message =
+    error instanceof Error ? error.message : "Connector command failed.";
+  return message
+    .replace(/mongodb(?:\+srv)?:\/\/[^\s"'<>]+/gi, "[database URI]")
+    .replace(/https?:\/\/[^\s)"'<>]+/gi, "[URL]")
+    .replace(
+      /((?:password|token|cookie|authorization|secret|api[_-]?key)\s*[=:]\s*)[^\s&]+/gi,
+      "$1[redacted]",
+    )
+    .slice(0, 500);
+}
 
-const urls = values.url ?? [];
-const [firstUrl, ...additionalUrls] = urls;
-if (!values.connector || !firstUrl) {
-  console.error(
-    'Usage: pnpm tsx scripts/run-connector.ts --connector google --url <hotel-url> [--url <hotel-url> ...] [--max-pages N] [--max-reviews N] [--timeout MS] [--locale TAG] [--last-seen-review-id ID] [--last-successful-crawl-at ISO] [--persisted-review-id ID ...] [--proxy|--no-proxy]'
+function hasFailure(results: readonly CrawlAndPersistResult[]): boolean {
+  return results.some(
+    (result) =>
+      !result.crawlResult?.success ||
+      Boolean(result.crawlFailure) ||
+      Boolean(result.persistenceFailure) ||
+      (result.persistenceResult?.failed ?? 0) > 0,
   );
-  process.exit(1);
 }
 
-if (values.connector !== 'google') {
-  console.error(`Unsupported connector '${values.connector}'. Only 'google' is implemented.`);
-  process.exit(1);
-}
-
-if (values.proxy && values['no-proxy']) {
-  console.error('Choose either --proxy or --no-proxy.');
-  process.exit(1);
-}
-
-function positiveInteger(value: string | undefined, option: string): number | undefined {
-  if (value === undefined) {
-    return undefined;
+async function main(): Promise<void> {
+  let options: ReturnType<typeof parseConnectorCliArgs>;
+  try {
+    options = parseConnectorCliArgs(process.argv.slice(2));
+  } catch (error) {
+    console.error(safeErrorMessage(error));
+    console.error(CONNECTOR_CLI_USAGE);
+    process.exitCode = 1;
+    return;
   }
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-    console.error(`--${option} must be a positive integer.`);
-    process.exit(1);
+
+  let runtime: RuntimeEnvironment;
+  try {
+    const proxyEnabledOverride = options.requests[0]?.proxyEnabled;
+    runtime = loadRuntimeEnvironment(
+      {
+        source: options.source,
+        persist: options.persist,
+        ...(proxyEnabledOverride !== undefined ? { proxyEnabledOverride } : {}),
+      },
+      process.env,
+    );
+  } catch (error) {
+    console.error(safeErrorMessage(error));
+    process.exitCode = 1;
+    return;
   }
-  return parsed;
+
+  let persistence: ReviewPersistenceService;
+  let closePersistence: () => Promise<void> = async () => {};
+  try {
+    if (options.persist) {
+      if (!runtime.mongoPersistenceConfig) {
+        throw new Error(
+          "MongoDB configuration is required when --persist is enabled.",
+        );
+      }
+      const provider = new MongoClientProvider(runtime.mongoPersistenceConfig);
+      const connected = await ReviewPersistenceService.connect(provider);
+      persistence = connected.service;
+      closePersistence = connected.close;
+    } else {
+      persistence = new ReviewPersistenceService();
+    }
+
+    const service = new CrawlAndPersistService(
+      options.source,
+      createReviewConnector(options.source),
+      persistence,
+    );
+    let results;
+    try {
+      results =
+        options.requests.length === 1
+          ? [
+              await service.run(options.requests[0]!, {
+                persist: options.persist,
+              }),
+            ]
+          : await service.runBatch(options.requests, {
+              persist: options.persist,
+            });
+    } finally {
+      await closePersistence();
+    }
+
+    const output = options.showPersistence
+      ? results.length === 1
+        ? results[0]
+        : results
+      : results.length === 1
+        ? (results[0]?.crawlResult ?? results[0])
+        : results.map((result) => result.crawlResult ?? result);
+    console.log(JSON.stringify(output, null, 2));
+    if (hasFailure(results)) process.exitCode = 1;
+  } catch (error) {
+    console.error(safeErrorMessage(error));
+    process.exitCode = 1;
+  }
 }
 
-const maxPages = positiveInteger(values['max-pages'], 'max-pages');
-const maxReviews = positiveInteger(values['max-reviews'], 'max-reviews');
-const timeoutMs = positiveInteger(values.timeout, 'timeout');
-const commonRequest = {
-  ...(maxPages !== undefined ? { maxPages } : {}),
-  ...(maxReviews !== undefined ? { maxReviews } : {}),
-  ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-  ...(values.locale ? { locale: values.locale } : {}),
-  ...(values['last-seen-review-id']
-    ? { lastSeenReviewId: values['last-seen-review-id'] }
-    : {}),
-  ...(values['last-successful-crawl-at']
-    ? { lastSuccessfulCrawlAt: values['last-successful-crawl-at'] }
-    : {}),
-  ...(values['persisted-review-id']
-    ? { persistedReviewIds: values['persisted-review-id'] }
-    : {}),
-  ...(values.proxy ? { proxyEnabled: true } : {}),
-  ...(values['no-proxy'] ? { proxyEnabled: false } : {})
-};
-const requests = [firstUrl, ...additionalUrls].map((url) => ({
-  ...commonRequest,
-  url
-}));
-const crawler = new GoogleCrawler();
-const result =
-  requests.length === 1
-    ? await crawler.crawl({ ...commonRequest, url: firstUrl })
-    : await crawler.crawlBatch(requests);
-
-console.log(JSON.stringify(result, null, 2));
-const failed = Array.isArray(result)
-  ? result.some((crawlResult) => !crawlResult.success)
-  : !result.success;
-if (failed) {
-  process.exitCode = 1;
-}
+void main();

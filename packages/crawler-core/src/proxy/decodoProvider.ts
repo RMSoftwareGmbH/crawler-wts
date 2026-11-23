@@ -1,4 +1,4 @@
-import { CrawlError } from '../crawler/CrawlError.js';
+import { CrawlError } from "../crawler/CrawlError.js";
 
 export interface DecodoEnvironment {
   DECODO_PROXY_HOST?: string;
@@ -15,27 +15,53 @@ export interface ProxyConfiguration {
 }
 
 export function createDecodoProxyConfiguration(
-  environment: DecodoEnvironment
+  environment: DecodoEnvironment,
 ): ProxyConfiguration {
   const host = environment.DECODO_PROXY_HOST?.trim();
   const port = environment.DECODO_PROXY_PORT?.trim();
   if (!host || !port) {
-    throw new CrawlError('proxy_failure', 'Decodo proxy host and port must be configured when proxying is enabled.');
+    throw new CrawlError(
+      "proxy_failure",
+      "Decodo proxy host and port must be configured when proxying is enabled.",
+    );
   }
-  if (!/^[a-z0-9.-]+$/i.test(host) || !/^\d{1,5}$/.test(port) || Number(port) > 65535) {
-    throw new CrawlError('proxy_failure', 'Decodo proxy host or port is invalid.');
+  const numericPort = Number(port);
+  if (
+    !/^[a-z0-9.-]+$/i.test(host) ||
+    !/^\d{1,5}$/.test(port) ||
+    numericPort < 1 ||
+    numericPort > 65535
+  ) {
+    throw new CrawlError(
+      "proxy_failure",
+      "Decodo proxy host or port is invalid.",
+    );
   }
 
   const country = environment.DECODO_PROXY_COUNTRY?.trim().toLowerCase();
   const rawUsername = environment.DECODO_PROXY_USERNAME;
-  const username = rawUsername?.replace('{country}', country ? `country-${country}` : '');
-  if (rawUsername?.includes('{country}') && !country) {
-    throw new CrawlError('proxy_failure', 'DECODO_PROXY_COUNTRY is required by the configured username template.');
+  if (rawUsername?.includes("{country}") && !country) {
+    throw new CrawlError(
+      "proxy_failure",
+      "DECODO_PROXY_COUNTRY is required by the configured username template.",
+    );
   }
+  if (country && !/^[a-z]{2}$/.test(country)) {
+    throw new CrawlError(
+      "proxy_failure",
+      "DECODO_PROXY_COUNTRY must be a two-letter country code.",
+    );
+  }
+  const username =
+    rawUsername && country
+      ? rawUsername.replace(/\{country\}/g, `country-${country}`)
+      : rawUsername;
 
   return {
     server: `http://${host}:${port}`,
     ...(username ? { username } : {}),
-    ...(environment.DECODO_PROXY_PASSWORD ? { password: environment.DECODO_PROXY_PASSWORD } : {})
+    ...(environment.DECODO_PROXY_PASSWORD
+      ? { password: environment.DECODO_PROXY_PASSWORD }
+      : {}),
   };
 }

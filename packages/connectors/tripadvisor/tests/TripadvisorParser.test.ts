@@ -33,8 +33,35 @@ describe("TripadvisorParser", () => {
       '<article data-automation="reviewCard"><span data-rating="3"></span><p data-review-text>Okay.</p></article>';
     const first = await new TripadvisorParser().parse(new FixturePage(html));
     const second = await new TripadvisorParser().parse(new FixturePage(html));
+    const anotherHotel = await new TripadvisorParser().parse(
+      new FixturePage(html),
+      "https://www.tripadvisor.com/Hotel_Review-g2-d2-Reviews-Other.html",
+    );
     expect(first[0]?.externalReviewId).toMatch(/^tripadvisor-/);
     expect(first[0]?.externalReviewId).toBe(second[0]?.externalReviewId);
+    expect(first[0]?.externalReviewId).not.toBe(
+      anotherHotel[0]?.externalReviewId,
+    );
+  });
+
+  it("skips cards without a usable rating and sanitizes public URLs", async () => {
+    const html =
+      '<article data-automation="reviewCard" data-review-id="bad"><p data-review-text>Broken.</p></article>' +
+      '<article data-automation="reviewCard" data-review-id="good"><span data-rating="4"></span>' +
+      '<a data-reviewer-profile href="https://www.tripadvisor.com/Profile/guest?token=private">Guest</a>' +
+      "<p data-review-text>Good.</p></article>";
+    const parsed = await new TripadvisorParser().parse(
+      new FixturePage(html),
+      "https://www.tripadvisor.com/Hotel_Review-g1-d1-Reviews-Example.html?token=private",
+    );
+
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]?.sourceUrl).toBe(
+      "https://www.tripadvisor.com/Hotel_Review-g1-d1-Reviews-Example.html",
+    );
+    expect(parsed[0]?.authorProfileUrl).toBe(
+      "https://www.tripadvisor.com/Profile/guest",
+    );
   });
 
   it("maps the parsed review to deterministic canonical JSON", async () => {

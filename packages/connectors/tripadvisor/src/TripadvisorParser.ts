@@ -6,6 +6,7 @@ import type {
 import {
   normalizeText,
   normalizeLanguage,
+  normalizeRating,
 } from "../../../crawler-normalization/src/index.js";
 import {
   TripadvisorSelectors as S,
@@ -60,6 +61,7 @@ function fallbackId(
   review: Omit<ParsedTripadvisorReview, "externalReviewId">,
 ): string {
   const stable = [
+    review.sourceUrl,
     review.authorName,
     review.rawDate,
     review.title,
@@ -71,28 +73,59 @@ function fallbackId(
   return `tripadvisor-${createHash("sha256").update(stable).digest("hex").slice(0, 24)}`;
 }
 
+function publicUrl(
+  value: string | undefined,
+  baseUrl: string,
+): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  try {
+    const url = new URL(value, baseUrl);
+    url.username = "";
+    url.password = "";
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
 export class TripadvisorParser {
   async parse(
     page: CrawlerPage,
     sourceUrl = page.url(),
   ): Promise<ParsedTripadvisorReview[]> {
+    const sanitizedSourceUrl = publicUrl(sourceUrl, sourceUrl) ?? "";
     const cards = page.locator(selectorList(S.reviewCards));
     const result: ParsedTripadvisorReview[] = [];
     for (let index = 0; index < (await cards.count()); index += 1) {
       const card = cards.nth(index);
+      if (!(await card.isVisible())) {
+        continue;
+      }
       const rawRating =
         (await firstAttribute(card, S.rating, "aria-label")) ??
         (await firstAttribute(card, S.rating, "data-rating"));
+      if (!rawRating || !normalizeRating(rawRating)) {
+        continue;
+      }
       const parsed: Omit<ParsedTripadvisorReview, "externalReviewId"> = {
         rawRating,
         title: await firstText(card, S.title),
         comment: await firstText(card, S.comment),
         authorName: await firstText(card, S.author),
-        authorProfileUrl: await firstAttribute(card, S.authorProfile, "href"),
+        authorProfileUrl: sanitizedSourceUrl
+          ? publicUrl(
+              await firstAttribute(card, S.authorProfile, "href"),
+              sanitizedSourceUrl,
+            )
+          : undefined,
         rawDate: await firstText(card, S.date),
         language: await firstAttribute(card, S.language, "lang"),
         businessReply: await firstText(card, S.businessReply),
-        sourceUrl,
+        sourceUrl: sanitizedSourceUrl,
       };
       const explicitId =
         normalizeText((await card.getAttribute("data-review-id")) ?? "") ??

@@ -8,14 +8,17 @@ Never commit proxy credentials to the repository.
 
 Recommended environment variables:
 
+- DECODO_PROXY_ENABLED
 - DECODO_PROXY_HOST
 - DECODO_PROXY_PORT
 - DECODO_PROXY_USERNAME
 - DECODO_PROXY_PASSWORD
 - DECODO_PROXY_COUNTRY
 
-Set `proxyEnabled` on a crawl request (or pass `--proxy` to the CLI) to use the
-proxy. Proxy configuration is strict: enabling it without a host and port
+Proxying is disabled by default. Set `DECODO_PROXY_ENABLED=true`, set
+`proxyEnabled` on a crawl request, or pass `--proxy` to the CLI to use the
+proxy. `--no-proxy` overrides the environment default. Proxy configuration is
+strict: enabling it without a host and port
 returns a classified failure instead of silently making a direct request.
 Country selection is supplied through the Decodo username when the username
 contains the `{country}` placeholder; for example, configure
