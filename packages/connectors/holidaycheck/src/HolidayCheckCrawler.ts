@@ -78,7 +78,7 @@ function isHolidayCheckHotelUrl(value: string): boolean {
       !url.password &&
       (url.hostname === "holidaycheck.de" ||
         url.hostname.endsWith(".holidaycheck.de")) &&
-      /\/(?:hi|hotel)(?:\/|[-_])/i.test(url.pathname)
+      /\/(?:hi|hr|hotel)(?:\/|[-_])/i.test(url.pathname)
     );
   } catch {
     return false;
@@ -389,7 +389,7 @@ export class HolidayCheckCrawler {
         ) {
           throw new CrawlError(
             "navigation_failure",
-            `HolidayCheck returned HTTP ${diagnostics.navigationStatus}.`,
+            `HolidayCheck returned HTTP ${diagnostics.navigationStatus} before rendering hotel content; the public URL may be rejected by the site edge or may no longer be valid.`,
           );
         }
 

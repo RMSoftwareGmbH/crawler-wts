@@ -38,6 +38,20 @@ describe("HolidayCheckCrawler", () => {
     });
   });
 
+  it("accepts the dedicated public reviews URL", async () => {
+    const reviewUrl =
+      "https://www.holidaycheck.de/hr/bewertungen-beispielhotel/abc123";
+    const result = await new HolidayCheckCrawler({
+      sessionFactory: async () => session(new FixturePage(await fixtureHtml())),
+      now: () => new Date("2026-06-20T12:00:00.000Z"),
+      pageDelayMs: 0,
+    }).crawl({ url: reviewUrl });
+
+    expect(result.success).toBe(true);
+    expect(result.reviews).toHaveLength(2);
+    expect(result.reviews[0]?.hotel.url).toBe(reviewUrl);
+  });
+
   it("filters persisted IDs, older reviews, and stops at last-seen ID", async () => {
     const persisted = await new HolidayCheckCrawler({
       sessionFactory: async () => session(new FixturePage(await fixtureHtml())),

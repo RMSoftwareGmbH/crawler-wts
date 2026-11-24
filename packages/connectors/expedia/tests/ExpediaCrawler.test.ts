@@ -39,6 +39,20 @@ describe("ExpediaCrawler", () => {
     });
   });
 
+  it("accepts localized Expedia.net hotel URLs", async () => {
+    const localizedUrl =
+      "https://euro.expedia.net/Basel-Hotels-Merian-Basel-Self-Check-In.h101392702.Hotel-Information";
+    const result = await new ExpediaCrawler({
+      sessionFactory: async () => session(new FixturePage(await fixtureHtml())),
+      now: () => new Date("2026-06-20T12:00:00.000Z"),
+      pageDelayMs: 0,
+    }).crawl({ url: localizedUrl });
+
+    expect(result.success).toBe(true);
+    expect(result.reviews).toHaveLength(2);
+    expect(result.reviews[0]?.hotel.url).toBe(localizedUrl);
+  });
+
   it("filters persisted IDs and stops at incremental crawl markers", async () => {
     const persisted = await new ExpediaCrawler({
       sessionFactory: async () => session(new FixturePage(await fixtureHtml())),
